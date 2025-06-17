@@ -293,6 +293,36 @@ class MockDataService {
       activeBookings: this.bookings.filter((b) => b.status === "Active").length,
     }
   }
+
+  async getActiveBookings(): Promise<Booking[]> {
+    return this.bookings.filter((booking) => booking.status === "Active")
+  }
+
+  async addCar(car: Omit<Car, "id">): Promise<Car> {
+    const newCar = {
+      ...car,
+      id: (this.cars.length + 1).toString(),
+    }
+    this.cars.push(newCar)
+    return newCar
+  }
+
+  async deleteCar(id: string): Promise<boolean> {
+    const index = this.cars.findIndex((car) => car.id === id)
+    if (index !== -1) {
+      this.cars.splice(index, 1)
+      return true
+    }
+    return false
+  }
+
+  async updateCar(id: string, updates: Partial<Car>): Promise<Car | null> {
+    const index = this.cars.findIndex((car) => car.id === id)
+    if (index === -1) return null
+
+    this.cars[index] = { ...this.cars[index], ...updates }
+    return this.cars[index]
+  }
 }
 
 export const mockDataService = new MockDataService()

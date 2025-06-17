@@ -16,9 +16,11 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog"
-import { Plus, Calendar, FileText, Car, IndianRupee, RefreshCw, CheckCircle } from "lucide-react"
+import { Plus, Calendar, FileText, Car, IndianRupee, RefreshCw, CheckCircle, AlertTriangle } from "lucide-react"
 import { mockDataService, type Booking, type Customer, type Car as CarType } from "@/lib/mock-data"
 import { enhancedPdfService, type EnhancedAgreementData } from "@/services/enhanced-pdf-service"
+import { notificationService } from "@/services/notification-service"
+import VehicleReturnChecklist from "@/components/vehicle/vehicle-return-checklist"
 
 export default function RentalBookings() {
   const [bookings, setBookings] = useState<Booking[]>([])
@@ -27,8 +29,8 @@ export default function RentalBookings() {
   const [loading, setLoading] = useState(true)
   const [isBookingDialogOpen, setIsBookingDialogOpen] = useState(false)
   const [newBooking, setNewBooking] = useState<Partial<Booking>>({
-    customerId: "none",
-    carId: "none",
+    customerId: "default",
+    carId: "default",
     startDate: "",
     endDate: "",
     startTime: "10:00", // Default pickup time
@@ -97,7 +99,14 @@ export default function RentalBookings() {
   }
 
   const handleCreateBooking = async () => {
-    if (newBooking.customerId && newBooking.carId && newBooking.startDate && newBooking.endDate) {
+    if (
+      newBooking.customerId &&
+      newBooking.customerId !== "default" &&
+      newBooking.carId &&
+      newBooking.carId !== "default" &&
+      newBooking.startDate &&
+      newBooking.endDate
+    ) {
       const hasConflict = await checkConflict(newBooking.carId, newBooking.startDate, newBooking.endDate)
 
       if (hasConflict) {
@@ -136,8 +145,8 @@ export default function RentalBookings() {
         await mockDataService.addBooking(bookingData)
         await loadData() // Refresh data after adding
         setNewBooking({
-          customerId: "none",
-          carId: "none",
+          customerId: "default",
+          carId: "default",
           startDate: "",
           endDate: "",
           startTime: "10:00",
@@ -158,7 +167,32 @@ export default function RentalBookings() {
 
   const handleMarkReturned = async (bookingId: string) => {
     try {
+      // Update booking status
       await mockDataService.updateBooking(bookingId, { status: "Returned" })
+
+      // Create vehicle return notifications for challan and FASTag checks
+      const returnNotifications = await notificationService.getVehicleReturnNotifications(bookingId)
+
+      // Show notifications to user
+      if (returnNotifications.length > 0) {
+        const challanNotification = returnNotifications.find((n) => n.type === "challan_check")
+        const fastagNotification = returnNotifications.find((n) => n.type === "fastag_check")
+
+        let alertMessage = "Vehicle marked as returned successfully!\n\nIMPORTANT REMINDERS:\n"
+
+        if (challanNotification) {
+          alertMessage += `\n🚨 ${challanNotification.title}\n${challanNotification.message}\n`
+        }
+
+        if (fastagNotification) {
+          alertMessage += `\n💳 ${fastagNotification.title}\n${fastagNotification.message}\n`
+        }
+
+        alertMessage += "\nPlease check these items before processing deposit refund."
+
+        alert(alertMessage)
+      }
+
       await loadData() // Refresh data after update
     } catch (error) {
       console.error("Error updating booking:", error)
@@ -227,16 +261,25 @@ export default function RentalBookings() {
     }
   }
 
+  // Helper function to safely find car data
+  const findCarById = (carId: string): CarType | undefined => {
+    return cars.find((c) => c.id === carId)
+  }
+
   const availableCars = cars.filter((car) => car.status === "Available")
   const duration =
     newBooking.startDate && newBooking.endDate ? calculateDuration(newBooking.startDate, newBooking.endDate) : 0
-  const dailyRate = newBooking.dailyRate || (newBooking.carId ? getDefaultDailyRate(newBooking.carId) : 0)
+  const dailyRate =
+    newBooking.dailyRate ||
+    (newBooking.carId && newBooking.carId !== "default" ? getDefaultDailyRate(newBooking.carId) : 0)
   const totalAmount = duration * dailyRate
 
   // Update daily rate when car selection changes
   const handleCarChange = (carId: string) => {
-    const defaultRate = getDefaultDailyRate(carId)
-    setNewBooking({ ...newBooking, carId, dailyRate: defaultRate })
+    if (carId !== "default") {
+      const defaultRate = getDefaultDailyRate(carId)
+      setNewBooking({ ...newBooking, carId, dailyRate: defaultRate })
+    }
   }
 
   if (loading) {
@@ -274,14 +317,14 @@ export default function RentalBookings() {
                 <div>
                   <Label htmlFor="customer">Customer</Label>
                   <Select
-                    value={newBooking.customerId || "none"}
+                    value={newBooking.customerId}
                     onValueChange={(value) => setNewBooking({ ...newBooking, customerId: value })}
                   >
                     <SelectTrigger>
                       <SelectValue placeholder="Select customer" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="none" disabled>
+                      <SelectItem value="default" disabled>
                         Select customer
                       </SelectItem>
                       {customers.map((customer) => (
@@ -294,12 +337,12 @@ export default function RentalBookings() {
                 </div>
                 <div>
                   <Label htmlFor="car">Car</Label>
-                  <Select value={newBooking.carId || "none"} onValueChange={handleCarChange}>
+                  <Select value={newBooking.carId} onValueChange={handleCarChange}>
                     <SelectTrigger>
                       <SelectValue placeholder="Select car" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="none" disabled>
+                      <SelectItem value="default" disabled>
                         Select car
                       </SelectItem>
                       {availableCars.map((car) => (
@@ -465,119 +508,138 @@ export default function RentalBookings() {
         </div>
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {bookings.map((booking) => (
-            <Card key={booking.id} className="hover:shadow-lg transition-shadow">
-              <CardHeader>
-                <div className="flex justify-between items-start">
-                  <div>
-                    <CardTitle className="text-lg">{booking.bookingId}</CardTitle>
-                    <CardDescription>{booking.customerName}</CardDescription>
-                  </div>
-                  <Badge className={getStatusColor(booking.status)}>{booking.status}</Badge>
-                </div>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-3">
-                  <div className="flex items-center space-x-2 text-sm">
-                    <Car className="h-4 w-4 text-gray-400" />
-                    <span>{booking.carDetails}</span>
-                  </div>
-                  <div className="flex items-center space-x-2 text-sm">
-                    <Calendar className="h-4 w-4 text-gray-400" />
-                    <span>
-                      {new Date(booking.startDate).toLocaleDateString()} at {booking.startTime} -{" "}
-                      {new Date(booking.endDate).toLocaleDateString()} at {booking.endTime}
-                    </span>
-                    <Badge variant="outline">{booking.duration} days</Badge>
-                  </div>
+          {bookings.map((booking) => {
+            const bookingCar = findCarById(booking.carId)
 
-                  {/* Enhanced Financial Display */}
-                  <div className="bg-gray-50 p-3 rounded-lg space-y-2">
-                    {booking.dailyRate && (
-                      <div className="flex justify-between text-sm">
-                        <span className="text-gray-600 flex items-center">
-                          <IndianRupee className="h-3 w-3 mr-1" />
-                          Daily Rate:
-                        </span>
-                        <span className="font-medium">₹{booking.dailyRate.toLocaleString()}/day</span>
-                      </div>
-                    )}
-                    {booking.totalAmount && (
-                      <div className="flex justify-between text-sm">
-                        <span className="text-gray-600">Total Rent Amount:</span>
-                        <span className="font-bold text-blue-600">₹{booking.totalAmount.toLocaleString()}</span>
-                      </div>
-                    )}
-                    <div className="flex justify-between text-sm">
-                      <span className="text-gray-600">Rent Received:</span>
-                      <span className="font-medium text-green-600">
-                        ₹{booking.totalRentReceived.toLocaleString()} ({booking.paymentMode})
+            return (
+              <Card key={booking.id} className="hover:shadow-lg transition-shadow">
+                <CardHeader>
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <CardTitle className="text-lg">{booking.bookingId}</CardTitle>
+                      <CardDescription>{booking.customerName}</CardDescription>
+                    </div>
+                    <Badge className={getStatusColor(booking.status)}>{booking.status}</Badge>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-3">
+                    <div className="flex items-center space-x-2 text-sm">
+                      <Car className="h-4 w-4 text-gray-400" />
+                      <span>{booking.carDetails}</span>
+                      {!bookingCar && (
+                        <Badge variant="outline" className="bg-yellow-50 text-yellow-700">
+                          <AlertTriangle className="h-3 w-3 mr-1" />
+                          Car Data Missing
+                        </Badge>
+                      )}
+                    </div>
+                    <div className="flex items-center space-x-2 text-sm">
+                      <Calendar className="h-4 w-4 text-gray-400" />
+                      <span>
+                        {new Date(booking.startDate).toLocaleDateString()} at {booking.startTime} -{" "}
+                        {new Date(booking.endDate).toLocaleDateString()} at {booking.endTime}
                       </span>
+                      <Badge variant="outline">{booking.duration} days</Badge>
                     </div>
-                    <div className="flex justify-between text-sm">
-                      <span className="text-gray-600">Security Deposit:</span>
-                      <span className="font-medium text-orange-600">₹{booking.depositAmount.toLocaleString()}</span>
-                    </div>
-                    {booking.totalAmount && booking.totalRentReceived < booking.totalAmount && (
+
+                    {/* Enhanced Financial Display */}
+                    <div className="bg-gray-50 p-3 rounded-lg space-y-2">
+                      {booking.dailyRate && (
+                        <div className="flex justify-between text-sm">
+                          <span className="text-gray-600 flex items-center">
+                            <IndianRupee className="h-3 w-3 mr-1" />
+                            Daily Rate:
+                          </span>
+                          <span className="font-medium">₹{booking.dailyRate.toLocaleString()}/day</span>
+                        </div>
+                      )}
+                      {booking.totalAmount && (
+                        <div className="flex justify-between text-sm">
+                          <span className="text-gray-600">Total Rent Amount:</span>
+                          <span className="font-bold text-blue-600">₹{booking.totalAmount.toLocaleString()}</span>
+                        </div>
+                      )}
                       <div className="flex justify-between text-sm">
-                        <span className="text-gray-600">Rent Pending:</span>
-                        <span className="font-medium text-red-600">
-                          ₹{(booking.totalAmount - booking.totalRentReceived).toLocaleString()}
+                        <span className="text-gray-600">Rent Received:</span>
+                        <span className="font-medium text-green-600">
+                          ₹{booking.totalRentReceived.toLocaleString()} ({booking.paymentMode})
                         </span>
                       </div>
-                    )}
-                    {booking.status === "Returned" && (
                       <div className="flex justify-between text-sm">
-                        <span className="text-gray-600">Deposit Status:</span>
-                        <span
-                          className={`font-medium ${booking.depositRefunded ? "text-green-600" : "text-orange-600"}`}
-                        >
-                          {booking.depositRefunded ? "✓ Refunded" : "⏳ Pending Refund"}
-                        </span>
+                        <span className="text-gray-600">Security Deposit:</span>
+                        <span className="font-medium text-orange-600">₹{booking.depositAmount.toLocaleString()}</span>
                       </div>
+                      {booking.totalAmount && booking.totalRentReceived < booking.totalAmount && (
+                        <div className="flex justify-between text-sm">
+                          <span className="text-gray-600">Rent Pending:</span>
+                          <span className="font-medium text-red-600">
+                            ₹{(booking.totalAmount - booking.totalRentReceived).toLocaleString()}
+                          </span>
+                        </div>
+                      )}
+                      {booking.status === "Returned" && (
+                        <div className="flex justify-between text-sm">
+                          <span className="text-gray-600">Deposit Status:</span>
+                          <span
+                            className={`font-medium ${booking.depositRefunded ? "text-green-600" : "text-orange-600"}`}
+                          >
+                            {booking.depositRefunded ? "✓ Refunded" : "⏳ Pending Refund"}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+
+                    {booking.notes && (
+                      <div className="text-sm text-gray-600 bg-gray-50 p-2 rounded">{booking.notes}</div>
                     )}
                   </div>
 
-                  {booking.notes && <div className="text-sm text-gray-600 bg-gray-50 p-2 rounded">{booking.notes}</div>}
-                </div>
-
-                <div className="flex justify-between items-center mt-4 pt-4 border-t">
-                  <span className="text-xs text-gray-500">
-                    Created: {new Date(booking.createdAt).toLocaleDateString()}
-                    {booking.returnedAt && (
-                      <>
-                        <br />
-                        Returned: {new Date(booking.returnedAt).toLocaleDateString()}
-                      </>
-                    )}
-                  </span>
-                  <div className="flex space-x-2">
-                    <Button variant="outline" size="sm" onClick={() => handleGenerateAgreement(booking)}>
-                      <FileText className="h-4 w-4 mr-1" />
-                      Agreement
-                    </Button>
-                    {booking.status === "Active" && (
-                      <Button size="sm" onClick={() => handleMarkReturned(booking.id!)}>
-                        Mark Returned
+                  <div className="flex justify-between items-center mt-4 pt-4 border-t">
+                    <span className="text-xs text-gray-500">
+                      Created: {new Date(booking.createdAt).toLocaleDateString()}
+                      {booking.returnedAt && (
+                        <>
+                          <br />
+                          Returned: {new Date(booking.returnedAt).toLocaleDateString()}
+                        </>
+                      )}
+                    </span>
+                    <div className="flex space-x-2">
+                      <Button variant="outline" size="sm" onClick={() => handleGenerateAgreement(booking)}>
+                        <FileText className="h-4 w-4 mr-1" />
+                        Agreement
                       </Button>
-                    )}
-                    {booking.status === "Returned" && !booking.depositRefunded && (
-                      <Button size="sm" variant="outline" onClick={() => handleRefundDeposit(booking.id!)}>
-                        <RefreshCw className="h-4 w-4 mr-1" />
-                        Refund Deposit
-                      </Button>
-                    )}
-                    {booking.depositRefunded && (
-                      <Badge variant="outline" className="bg-green-50 text-green-700">
-                        <CheckCircle className="h-3 w-3 mr-1" />
-                        Deposit Refunded
-                      </Badge>
-                    )}
+                      {booking.status === "Active" && (
+                        <Button size="sm" onClick={() => handleMarkReturned(booking.id!)}>
+                          Mark Returned
+                        </Button>
+                      )}
+                      {booking.status === "Returned" && !booking.depositRefunded && (
+                        <>
+                          <VehicleReturnChecklist
+                            booking={booking}
+                            car={bookingCar}
+                            onComplete={() => handleRefundDeposit(booking.id!)}
+                          />
+                          <Button size="sm" variant="outline" onClick={() => handleRefundDeposit(booking.id!)}>
+                            <RefreshCw className="h-4 w-4 mr-1" />
+                            Refund Deposit
+                          </Button>
+                        </>
+                      )}
+                      {booking.depositRefunded && (
+                        <Badge variant="outline" className="bg-green-50 text-green-700">
+                          <CheckCircle className="h-3 w-3 mr-1" />
+                          Deposit Refunded
+                        </Badge>
+                      )}
+                    </div>
                   </div>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
+                </CardContent>
+              </Card>
+            )
+          })}
         </div>
       )}
     </div>

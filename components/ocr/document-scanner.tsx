@@ -2,7 +2,7 @@
 
 import type React from "react"
 
-import { useState, useRef } from "react"
+import { useState, useRef, useCallback } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -18,7 +18,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog"
-import { Camera, Upload, Scan, CheckCircle, AlertTriangle, Copy } from "lucide-react"
+import { Camera, Upload, Scan, CheckCircle, AlertTriangle, Copy, X, RotateCcw } from "lucide-react"
 import { ocrService, type AadharData, type DLData, type OCRResult } from "@/services/ocr-service"
 
 interface DocumentScannerProps {
@@ -33,17 +33,128 @@ export default function DocumentScanner({ onDataExtracted, documentType }: Docum
   const [progress, setProgress] = useState(0)
   const [result, setResult] = useState<OCRResult | null>(null)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [isCameraMode, setIsCameraMode] = useState(false)
+  const [stream, setStream] = useState<MediaStream | null>(null)
+
   const fileInputRef = useRef<HTMLInputElement>(null)
   const cameraInputRef = useRef<HTMLInputElement>(null)
+  const videoRef = useRef<HTMLVideoElement>(null)
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const progressIntervalRef = useRef<NodeJS.Timeout | null>(null)
+
+  const cleanup = useCallback(() => {
+    // Clean up URLs
+    if (previewUrl) {
+      URL.revokeObjectURL(previewUrl)
+    }
+
+    // Clean up camera stream
+    if (stream) {
+      stream.getTracks().forEach((track) => track.stop())
+      setStream(null)
+    }
+
+    // Clean up progress interval
+    if (progressIntervalRef.current) {
+      clearInterval(progressIntervalRef.current)
+      progressIntervalRef.current = null
+    }
+
+    setIsCameraMode(false)
+  }, [previewUrl, stream])
+
+  const resetScanner = useCallback(() => {
+    cleanup()
+    setSelectedFile(null)
+    setPreviewUrl(null)
+    setResult(null)
+    setProgress(0)
+    setError(null)
+    setIsProcessing(false)
+
+    if (fileInputRef.current) fileInputRef.current.value = ""
+    if (cameraInputRef.current) cameraInputRef.current.value = ""
+  }, [cleanup])
 
   const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
     if (file) {
+      // Validate file type
+      if (!file.type.startsWith("image/")) {
+        setError("Please select a valid image file")
+        return
+      }
+
+      // Validate file size (max 10MB)
+      if (file.size > 10 * 1024 * 1024) {
+        setError("File size must be less than 10MB")
+        return
+      }
+
+      cleanup()
+      setError(null)
       setSelectedFile(file)
       const url = URL.createObjectURL(file)
       setPreviewUrl(url)
       setResult(null)
     }
+  }
+
+  const startCamera = async () => {
+    try {
+      setError(null)
+      const mediaStream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: "environment",
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+        },
+      })
+
+      setStream(mediaStream)
+      setIsCameraMode(true)
+
+      if (videoRef.current) {
+        videoRef.current.srcObject = mediaStream
+        videoRef.current.play()
+      }
+    } catch (error) {
+      console.error("Camera access error:", error)
+      setError("Unable to access camera. Please check permissions or use file upload.")
+    }
+  }
+
+  const capturePhoto = () => {
+    if (!videoRef.current || !canvasRef.current) return
+
+    const video = videoRef.current
+    const canvas = canvasRef.current
+    const context = canvas.getContext("2d")
+
+    if (!context) return
+
+    // Set canvas dimensions to match video
+    canvas.width = video.videoWidth
+    canvas.height = video.videoHeight
+
+    // Draw the video frame to canvas
+    context.drawImage(video, 0, 0, canvas.width, canvas.height)
+
+    // Convert canvas to blob
+    canvas.toBlob(
+      (blob) => {
+        if (blob) {
+          const file = new File([blob], `${documentType}-capture.jpg`, { type: "image/jpeg" })
+          setSelectedFile(file)
+          const url = URL.createObjectURL(blob)
+          setPreviewUrl(url)
+          cleanup()
+        }
+      },
+      "image/jpeg",
+      0.8,
+    )
   }
 
   const handleCameraCapture = () => {
@@ -59,12 +170,16 @@ export default function DocumentScanner({ onDataExtracted, documentType }: Docum
 
     setIsProcessing(true)
     setProgress(0)
+    setError(null)
 
     // Simulate progress updates
-    const progressInterval = setInterval(() => {
+    progressIntervalRef.current = setInterval(() => {
       setProgress((prev) => {
         if (prev >= 90) {
-          clearInterval(progressInterval)
+          if (progressIntervalRef.current) {
+            clearInterval(progressIntervalRef.current)
+            progressIntervalRef.current = null
+          }
           return 90
         }
         return prev + 10
@@ -85,56 +200,73 @@ export default function DocumentScanner({ onDataExtracted, documentType }: Docum
 
       if (ocrResult.success && ocrResult.data) {
         onDataExtracted(ocrResult.data, documentType)
+      } else {
+        setError(ocrResult.error || "Failed to extract data from document")
       }
     } catch (error) {
+      console.error("OCR processing error:", error)
       setResult({
         success: false,
         data: null,
         confidence: 0,
-        error: "Processing failed",
+        error: "Processing failed. Please try again with a clearer image.",
       })
+      setError("Processing failed. Please try again with a clearer image.")
     } finally {
-      clearInterval(progressInterval)
+      if (progressIntervalRef.current) {
+        clearInterval(progressIntervalRef.current)
+        progressIntervalRef.current = null
+      }
       setIsProcessing(false)
     }
   }
 
-  const resetScanner = () => {
-    setSelectedFile(null)
-    setPreviewUrl(null)
-    setResult(null)
-    setProgress(0)
-    if (fileInputRef.current) fileInputRef.current.value = ""
-    if (cameraInputRef.current) cameraInputRef.current.value = ""
+  const copyToClipboard = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text)
+    } catch (error) {
+      console.error("Failed to copy to clipboard:", error)
+    }
   }
 
-  const copyToClipboard = (text: string) => {
-    navigator.clipboard.writeText(text)
+  const handleDialogClose = (open: boolean) => {
+    if (!open) {
+      cleanup()
+      resetScanner()
+    }
+    setIsOpen(open)
   }
 
   const documentTitle = documentType === "aadhar" ? "Aadhar Card" : "Driving License"
 
   return (
-    <Dialog open={isOpen} onOpenChange={setIsOpen}>
+    <Dialog open={isOpen} onOpenChange={handleDialogClose}>
       <DialogTrigger asChild>
         <Button variant="outline" size="sm">
           <Scan className="h-4 w-4 mr-2" />
           Scan {documentTitle}
         </Button>
       </DialogTrigger>
-      <DialogContent className="max-w-2xl">
+      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>OCR Document Scanner</DialogTitle>
           <DialogDescription>Automatically extract data from {documentTitle}</DialogDescription>
         </DialogHeader>
 
         <div className="space-y-6">
-          {!selectedFile && (
+          {error && (
+            <Alert variant="destructive">
+              <AlertTriangle className="h-4 w-4" />
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
+          )}
+
+          {!selectedFile && !isCameraMode && (
             <div className="space-y-4">
               <div className="grid grid-cols-2 gap-4">
-                <Button variant="outline" onClick={handleCameraCapture} className="h-24 flex-col">
+                <Button variant="outline" onClick={startCamera} className="h-24 flex-col">
                   <Camera className="h-8 w-8 mb-2" />
-                  Take Photo
+                  Use Camera
                 </Button>
                 <Button variant="outline" onClick={handleUploadClick} className="h-24 flex-col">
                   <Upload className="h-8 w-8 mb-2" />
@@ -155,9 +287,44 @@ export default function DocumentScanner({ onDataExtracted, documentType }: Docum
               <Alert>
                 <AlertTriangle className="h-4 w-4" />
                 <AlertDescription>
-                  For best results, ensure the document is well-lit, flat, and all text is clearly visible.
+                  For best results, ensure the document is well-lit, flat, and all text is clearly visible. Supported
+                  formats: JPG, PNG, WebP (max 10MB)
                 </AlertDescription>
               </Alert>
+            </div>
+          )}
+
+          {isCameraMode && (
+            <div className="space-y-4">
+              <Card>
+                <CardHeader>
+                  <div className="flex justify-between items-center">
+                    <CardTitle className="text-lg">Camera View</CardTitle>
+                    <Button variant="outline" size="sm" onClick={() => cleanup()}>
+                      <X className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <div className="relative">
+                    <video
+                      ref={videoRef}
+                      className="w-full max-h-64 object-contain rounded-lg border"
+                      autoPlay
+                      playsInline
+                      muted
+                    />
+                    <canvas ref={canvasRef} className="hidden" />
+                    <div className="absolute inset-0 border-2 border-dashed border-blue-500 rounded-lg pointer-events-none opacity-50" />
+                  </div>
+                  <div className="mt-4 flex justify-center">
+                    <Button onClick={capturePhoto} size="lg">
+                      <Camera className="h-5 w-5 mr-2" />
+                      Capture Photo
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
             </div>
           )}
 
@@ -165,7 +332,13 @@ export default function DocumentScanner({ onDataExtracted, documentType }: Docum
             <div className="space-y-4">
               <Card>
                 <CardHeader>
-                  <CardTitle className="text-lg">Document Preview</CardTitle>
+                  <div className="flex justify-between items-center">
+                    <CardTitle className="text-lg">Document Preview</CardTitle>
+                    <Button variant="outline" size="sm" onClick={resetScanner}>
+                      <RotateCcw className="h-4 w-4 mr-2" />
+                      Reset
+                    </Button>
+                  </div>
                 </CardHeader>
                 <CardContent>
                   <div className="relative">
@@ -173,6 +346,7 @@ export default function DocumentScanner({ onDataExtracted, documentType }: Docum
                       src={previewUrl || "/placeholder.svg"}
                       alt="Document preview"
                       className="w-full max-h-64 object-contain rounded-lg border"
+                      onError={() => setError("Failed to load image preview")}
                     />
                     <Badge className="absolute top-2 right-2 bg-blue-600">{documentTitle}</Badge>
                   </div>
@@ -196,6 +370,7 @@ export default function DocumentScanner({ onDataExtracted, documentType }: Docum
                         <span>{progress}%</span>
                       </div>
                       <Progress value={progress} className="w-full" />
+                      <p className="text-xs text-gray-500 text-center">This may take a few seconds. Please wait...</p>
                     </div>
                   </CardContent>
                 </Card>
@@ -313,16 +488,24 @@ export default function DocumentScanner({ onDataExtracted, documentType }: Docum
                           <Button variant="outline" onClick={resetScanner}>
                             Scan Another
                           </Button>
-                          <Button onClick={() => setIsOpen(false)}>Use This Data</Button>
+                          <Button onClick={() => handleDialogClose(false)}>Use This Data</Button>
                         </div>
                       </div>
                     ) : (
-                      <Alert variant="destructive">
-                        <AlertTriangle className="h-4 w-4" />
-                        <AlertDescription>
-                          {result.error || "Failed to extract data from the document"}
-                        </AlertDescription>
-                      </Alert>
+                      <div className="space-y-4">
+                        <Alert variant="destructive">
+                          <AlertTriangle className="h-4 w-4" />
+                          <AlertDescription>
+                            {result.error || "Failed to extract data from the document"}
+                          </AlertDescription>
+                        </Alert>
+                        <div className="flex justify-center">
+                          <Button variant="outline" onClick={resetScanner}>
+                            <RotateCcw className="h-4 w-4 mr-2" />
+                            Try Again
+                          </Button>
+                        </div>
+                      </div>
                     )}
                   </CardContent>
                 </Card>

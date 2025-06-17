@@ -14,7 +14,6 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog"
-import { Badge } from "@/components/ui/badge"
 import { Plus, Car, User, Calendar, AlertTriangle, CheckCircle, Clock, IndianRupee } from "lucide-react"
 import { mockDataService, type Car as CarType, type Customer } from "@/lib/mock-data"
 
@@ -50,10 +49,10 @@ export default function QuickBookingDialog({ onBookingCreated }: QuickBookingDia
   const [hasConflict, setHasConflict] = useState(false)
 
   const [bookingData, setBookingData] = useState<QuickBookingData>({
-    customerId: "none",
+    customerId: "default",
     customerName: "",
     customerPhone: "",
-    carId: "none",
+    carId: "default",
     startDate: "",
     endDate: "",
     startTime: "10:00",
@@ -100,7 +99,7 @@ export default function QuickBookingDialog({ onBookingCreated }: QuickBookingDia
         totalRentAmount,
       }))
 
-      if (bookingData.carId) {
+      if (bookingData.carId && bookingData.carId !== "default") {
         checkConflict()
       }
     }
@@ -134,7 +133,7 @@ export default function QuickBookingDialog({ onBookingCreated }: QuickBookingDia
   }
 
   const checkConflict = async () => {
-    if (bookingData.carId && bookingData.startDate && bookingData.endDate) {
+    if (bookingData.carId && bookingData.carId !== "default" && bookingData.startDate && bookingData.endDate) {
       const conflict = await mockDataService.checkConflict(
         bookingData.carId,
         bookingData.startDate,
@@ -229,10 +228,10 @@ export default function QuickBookingDialog({ onBookingCreated }: QuickBookingDia
 
       // Reset form
       setBookingData({
-        customerId: "none",
+        customerId: "default",
         customerName: "",
         customerPhone: "",
-        carId: "none",
+        carId: "default",
         startDate: "",
         endDate: "",
         startTime: "10:00",
@@ -268,9 +267,9 @@ export default function QuickBookingDialog({ onBookingCreated }: QuickBookingDia
   const canProceed = () => {
     switch (step) {
       case 1:
-        return bookingData.customerId !== "" && bookingData.customerId !== "none"
+        return bookingData.customerId !== "" && bookingData.customerId !== "default"
       case 2:
-        return bookingData.carId !== "" && bookingData.carId !== "none"
+        return bookingData.carId !== "" && bookingData.carId !== "default"
       case 3:
         return bookingData.startDate !== "" && bookingData.endDate !== "" && !hasConflict
       case 4:
@@ -328,14 +327,14 @@ export default function QuickBookingDialog({ onBookingCreated }: QuickBookingDia
             <div>
               <Label>Select Existing Customer</Label>
               <Select
-                value={bookingData.customerId || "none"}
-                onValueChange={(value) => value !== "none" && handleCustomerSelect(value)}
+                value={bookingData.customerId}
+                onValueChange={(value) => value !== "default" && handleCustomerSelect(value)}
               >
                 <SelectTrigger>
                   <SelectValue placeholder="Choose a customer" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="none" disabled>
+                  <SelectItem value="default" disabled>
                     Choose a customer
                   </SelectItem>
                   {customers.map((customer) => (
@@ -411,18 +410,19 @@ export default function QuickBookingDialog({ onBookingCreated }: QuickBookingDia
           <div className="space-y-4">
             <div>
               <Label>Available Vehicles</Label>
-              <div className="grid grid-cols-1 gap-3 mt-2">
-                {availableCars.map((car) => (
-                  <div
-                    key={car.id}
-                    className={`border rounded-lg p-4 cursor-pointer transition-all ${
-                      bookingData.carId === car.id
-                        ? "border-blue-500 bg-blue-50"
-                        : "border-gray-200 hover:border-gray-300"
-                    }`}
-                    onClick={() => handleCarSelect(car.id)}
-                  >
-                    <div className="flex items-center justify-between">
+              <Select
+                value={bookingData.carId}
+                onValueChange={(value) => value !== "default" && handleCarSelect(value)}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select vehicle" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="default" disabled>
+                    Select vehicle
+                  </SelectItem>
+                  {availableCars.map((car) => (
+                    <SelectItem key={car.id} value={car.id}>
                       <div className="flex items-center space-x-3">
                         <Car className="h-5 w-5 text-gray-400" />
                         <div>
@@ -432,16 +432,12 @@ export default function QuickBookingDialog({ onBookingCreated }: QuickBookingDia
                           <p className="text-sm text-gray-600">
                             {car.plateNumber} • {car.fuelType} • {car.transmission}
                           </p>
-                          <p className="text-sm text-blue-600 font-medium">₹{getDefaultDailyRate(car)}/day</p>
                         </div>
                       </div>
-                      <Badge variant="secondary" className="bg-green-100 text-green-800">
-                        Available
-                      </Badge>
-                    </div>
-                  </div>
-                ))}
-              </div>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
 
             {selectedCar && (
@@ -526,12 +522,16 @@ export default function QuickBookingDialog({ onBookingCreated }: QuickBookingDia
               </div>
             )}
 
-            {!hasConflict && bookingData.carId && bookingData.startDate && bookingData.endDate && (
-              <div className="flex items-center space-x-2 text-sm text-green-600 bg-green-50 p-3 rounded">
-                <CheckCircle className="h-4 w-4" />
-                <span>No conflicts found. Car is available for the selected dates!</span>
-              </div>
-            )}
+            {!hasConflict &&
+              bookingData.carId &&
+              bookingData.carId !== "default" &&
+              bookingData.startDate &&
+              bookingData.endDate && (
+                <div className="flex items-center space-x-2 text-sm text-green-600 bg-green-50 p-3 rounded">
+                  <CheckCircle className="h-4 w-4" />
+                  <span>No conflicts found. Car is available for the selected dates!</span>
+                </div>
+              )}
           </div>
         )}
 
@@ -667,26 +667,32 @@ export default function QuickBookingDialog({ onBookingCreated }: QuickBookingDia
                   <p className="font-medium">₹{bookingData.dailyRate}/day</p>
                   <p className="text-gray-600">Total: ₹{bookingData.totalRentAmount.toLocaleString()}</p>
                 </div>
-                <div>
-                  <span className="text-gray-600">Payment:</span>
-                  <p className="font-medium">₹{bookingData.advanceAmount.toLocaleString()} advance</p>
-                  <p className="text-gray-600">{bookingData.paymentMode}</p>
+              </div>
+
+              <div className="border-t pt-3">
+                <div className="flex justify-between text-sm">
+                  <span>Advance Paid ({bookingData.paymentMode}):</span>
+                  <span className="font-medium">₹{bookingData.advanceAmount.toLocaleString()}</span>
                 </div>
-                <div>
-                  <span className="text-gray-600">Balance:</span>
-                  <p className="font-medium text-orange-600">
+                <div className="flex justify-between text-sm text-orange-600">
+                  <span>Balance Due at Return:</span>
+                  <span className="font-medium">
                     ₹{(bookingData.totalRentAmount - bookingData.advanceAmount).toLocaleString()}
-                  </p>
-                  <p className="text-gray-600">Due on return</p>
+                  </span>
                 </div>
               </div>
 
               {bookingData.notes && (
-                <div>
-                  <span className="text-gray-600">Notes:</span>
-                  <p className="text-sm bg-white p-2 rounded border">{bookingData.notes}</p>
+                <div className="border-t pt-3">
+                  <span className="text-gray-600 text-sm">Notes:</span>
+                  <p className="text-sm">{bookingData.notes}</p>
                 </div>
               )}
+            </div>
+
+            <div className="flex items-center space-x-2 text-sm text-green-600 bg-green-50 p-3 rounded">
+              <CheckCircle className="h-4 w-4" />
+              <span>All details verified. Ready to create booking!</span>
             </div>
           </div>
         )}
@@ -698,10 +704,6 @@ export default function QuickBookingDialog({ onBookingCreated }: QuickBookingDia
           </Button>
 
           <div className="flex space-x-2">
-            <Button variant="outline" onClick={() => setIsOpen(false)}>
-              Cancel
-            </Button>
-
             {step < 5 ? (
               <Button onClick={nextStep} disabled={!canProceed()}>
                 Next
@@ -714,7 +716,10 @@ export default function QuickBookingDialog({ onBookingCreated }: QuickBookingDia
                     Creating...
                   </>
                 ) : (
-                  "Create Booking"
+                  <>
+                    <CheckCircle className="h-4 w-4 mr-2" />
+                    Create Booking
+                  </>
                 )}
               </Button>
             )}
